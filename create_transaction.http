@@ -1,8 +1,0 @@
-POST http://localhost:4000/clientes/1/transacoes
-Content-Type: application/json
-
-{
-  "valor": 100,
-  "tipo": "d",
-  "descricao": "Compra de roupas"
-}

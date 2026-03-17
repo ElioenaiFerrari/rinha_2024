@@ -10,6 +10,8 @@ defmodule RinhaV2.Repo.Migrations.CreateTransactions do
 
       timestamps()
     end
+
+    create index(:transactions, [:client_id, :inserted_at])
   end
 
   def down do

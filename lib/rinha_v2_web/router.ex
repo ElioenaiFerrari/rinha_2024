@@ -3,6 +3,7 @@ defmodule RinhaV2Web.Router do
   import Plug.Conn
   require Logger
 
+  require Ecto.Query
   alias RinhaV2.Transactions.Transaction
   alias RinhaV2.Clients.Client
   alias RinhaV2.Repo
@@ -12,37 +13,87 @@ defmodule RinhaV2Web.Router do
   plug(:dispatch)
 
   post "/clientes/:id/transacoes" do
-    body = conn.body_params
+    client_id = String.to_integer(conn.params["id"])
+    %{"valor" => valor, "tipo" => tipo, "descricao" => descricao} = conn.body_params
+    valor_operacao = if tipo == "d", do: -valor, else: valor
+
+    result =
+      Repo.transaction(
+        fn ->
+          query_update = """
+            UPDATE clients
+            SET saldo = saldo + $1
+            WHERE id = $2 AND ($3 = 'c' OR (saldo + $1 >= -limite))
+            RETURNING saldo, limite
+          """
+
+          case Repo.query(query_update, [valor_operacao, client_id, tipo]) do
+            {:ok, %{rows: [[novo_saldo, limite]]}} ->
+              # Inserção direta sem changeset (mais rápido)
+              Repo.query!(
+                "INSERT INTO transactions (client_id, valor, tipo, descricao, inserted_at, updated_at) VALUES ($1, $2, $3, $4, datetime('now'), datetime('now'))",
+                [client_id, valor, tipo, descricao]
+              )
+
+              %{limite: limite, saldo: novo_saldo}
+
+            {:ok, %{rows: []}} ->
+              # Se falhou, provavelmente é limite. Não faça Repo.get aqui se quiser velocidade máxima.
+              # Se a Rinha garantir que o ID existe, assuma limite.
+              # Se precisar validar ID, faça fora da transação ou aceite o custo.
+              Repo.rollback(:limite_ou_nao_encontrado)
+          end
+        end,
+        timeout: 15000
+      )
+
+    # TRATAMENTO DO RESULTADO:
+    case result do
+      {:ok, data} ->
+        # Aqui 'data' é apenas o mapa %{limite: ..., saldo: ...}, sem a tupla {:ok, ...}
+        json(conn, :ok, data)
+
+      {:error, :limite_insuficiente} ->
+        send_resp(conn, 422, "")
+
+      {:error, :not_found} ->
+        send_resp(conn, 404, "")
+
+      _ ->
+        send_resp(conn, 500, "")
+    end
+  end
+
+  get "/clientes/:id/extrato" do
     client_id = conn.params["id"] |> String.to_integer()
 
-    Logger.info("Creating transaction for client #{client_id} with body #{inspect(body)}")
-
     with %Client{} = client <- Repo.get(Client, client_id),
-         body <- body |> Map.put("client_id", client.id),
-         {:ok, %{client: client}} <-
-           Ecto.Multi.new()
-           |> Ecto.Multi.insert(:transaction, Transaction.create_changeset(body))
-           |> Ecto.Multi.update(:client, fn _ ->
-             saldo =
-               if body["tipo"] == "c" do
-                 client.saldo + body["valor"]
-               else
-                 client.saldo - body["valor"]
-               end
-
-             Client.update_changeset(client, %{saldo: saldo})
-           end)
-           |> Repo.transaction() do
-      json(conn, :created, client)
+         transactions <-
+           Ecto.Query.from(t in Transaction,
+             where: t.client_id == ^client.id,
+             order_by: [desc: t.inserted_at],
+             limit: 10
+           )
+           |> Repo.all() do
+      json(conn, :ok, %{
+        saldo: %{
+          limite: client.limite,
+          saldo: client.saldo,
+          data_extrato: DateTime.utc_now()
+        },
+        ultimas_transacoes:
+          transactions
+          |> Enum.map(fn transaction ->
+            %{
+              valor: transaction.valor,
+              tipo: transaction.tipo,
+              descricao: transaction.descricao,
+              realizada_em: transaction.inserted_at
+            }
+          end)
+      })
     else
-      {:error, changeset} ->
-        json(conn, :unprocessable_entity, %{error: parse_changeset_errors(changeset)})
-
-      {:error, _, changeset, _} ->
-        json(conn, :unprocessable_entity, %{error: parse_changeset_errors(changeset)})
-
-      nil ->
-        json(conn, :not_found, %{error: "Cliente não encontrado"})
+      nil -> json(conn, :not_found, %{error: "Cliente não encontrado"})
     end
   end
 
