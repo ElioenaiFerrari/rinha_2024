@@ -42,6 +42,7 @@ defmodule RinhaV2Web.Router do
               # Se a Rinha garantir que o ID existe, assuma limite.
               # Se precisar validar ID, faça fora da transação ou aceite o custo.
               Repo.rollback(:limite_ou_nao_encontrado)
+              {:error, :limite_ou_nao_encontrado}
           end
         end,
         timeout: 15000
@@ -53,14 +54,14 @@ defmodule RinhaV2Web.Router do
         # Aqui 'data' é apenas o mapa %{limite: ..., saldo: ...}, sem a tupla {:ok, ...}
         json(conn, :ok, data)
 
-      {:error, :limite_insuficiente} ->
-        send_resp(conn, 422, "")
+      {:error, :limite_ou_nao_encontrado} ->
+        json(conn, :unprocessable_entity, %{error: "Limite insuficiente"})
 
       {:error, :not_found} ->
-        send_resp(conn, 404, "")
+        json(conn, :not_found, %{error: "Cliente não encontrado"})
 
       _ ->
-        send_resp(conn, 500, "")
+        json(conn, :internal_server_error, %{error: "Erro interno do servidor"})
     end
   end
 

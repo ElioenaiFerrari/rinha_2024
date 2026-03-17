@@ -1,6 +1,6 @@
 #!/bin/bash
 
-URL="http://localhost:4000/clientes/1/transacoes"
+URL="http://127.0.0.1:4000/clientes/1/transacoes"
 TMP_FILE=$(mktemp)
 
 # quantidade de requests pré-geradas (ajusta se quiser)
